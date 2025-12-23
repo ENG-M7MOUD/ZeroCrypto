@@ -54,7 +54,7 @@ struct AppConfig {
     int lastActiveIndex = 0; 
 };
 
-static const char* DEV_PORTFOLIO_URL = "https://eng-m7moud.github.io/protofolio/";
+static const char* DEV_PORTFOLIO_URL = "https://eng-m7moud.github.io/protofolio/#contact";
 
 // UI State Flags
 // REMOVED g_OpenAddPopup to fix ghost build error
@@ -662,7 +662,7 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
         {
             ImVec2 p = ImGui::GetCursorScreenPos();
             float winWidth = ImGui::GetWindowWidth();
-            ImGui::SetCursorPos(ImVec2(10, 8)); ImGui::TextDisabled("ZERO CRYPTO v7.8");
+            ImGui::SetCursorPos(ImVec2(10, 8)); ImGui::TextDisabled("ZERO CRYPTO v1.2");
             ImGui::SameLine(); ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), "[Speed Exit: CTRL+F12 ]");
             
             float btnRadius = 10.0f;
