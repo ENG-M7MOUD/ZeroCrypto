@@ -1,3 +1,14 @@
+# ZeroCrypto Architecture Overview
+
+This document describes the internal structure of **ZeroCrypto** and the
+responsibilities of each core module.
+
+---
+
+## 🧩 High-Level Architecture
+
+
+
 ┌──────────────────────────┐
 
 │        WinMain           │

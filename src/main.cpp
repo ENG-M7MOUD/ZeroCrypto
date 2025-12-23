@@ -56,13 +56,15 @@ struct AppConfig {
 
 static const char* DEV_PORTFOLIO_URL = "https://eng-m7moud.github.io/protofolio/";
 
-static bool g_OpenAddPopup = false;
-static bool g_OpenCreatePopup = false;
-static bool g_ShowSuccess = false;
-
-static bool g_ShowAddWindow = false;
-static bool g_ShowCreateWindow = false;
+// UI State Flags
+// REMOVED g_OpenAddPopup to fix ghost build error
+static bool g_ShowAddWindow = false; // "Add Vault" window
+static bool g_ShowCreateWindow = false; // "Create Vault" window
 static bool g_ShowCreationProgress = false; // Popup for async creation
+static bool g_ShowSuccess = false; // Mount success
+static bool g_ShowVaultCreatedSuccess = false; // Creation success modal
+static bool g_focusPassword = false; // Trigger to focus password input
+static bool g_OpenCreatePopup = false;
 
 // Direct X
 static ID3D11Device* g_Device = nullptr;
@@ -344,8 +346,10 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         DragFinish(hDrop);
         
         SystemUtils::ExtractFileName(newVaultPath, newVaultName, sizeof(newVaultName));
-        g_OpenAddPopup = true; 
-
+        
+        // FIX: Directly toggle the "Add Vault" window instead of an undefined popup
+        g_ShowAddWindow = true; 
+        
         driveIndex = 0;
         AddLog("[INFO] Vault dropped: %s", newVaultPath);
         SetForegroundWindow(hWnd);
@@ -462,11 +466,6 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
         
         // ================== POPUP LOGIC ==================
         
-        if (g_OpenAddPopup) {
-            SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-            ImGui::OpenPopup("AddVaultPopup");
-            g_OpenAddPopup = false;
-        }
         if (g_OpenCreatePopup) {
             SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             ImGui::OpenPopup("CreateVaultPopup");
@@ -478,20 +477,38 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
             SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             ImGui::Begin("Add Vault", &g_ShowAddWindow, ImGuiWindowFlags_AlwaysAutoResize);
             ImGui::Text("CONFIGURATION"); ImGui::Separator();
+            
+            // Check for DUPLICATE registration before adding
+            bool isDuplicate = false; 
+            if (strlen(newVaultPath) > 0) {
+                auto& vaults = VaultRegistry::All();
+                for (const auto& v : vaults) {
+                    if (strcmpi(v.path.c_str(), newVaultPath) == 0) {
+                        isDuplicate = true; break;
+                    }
+                }
+            }
+
             if (ImGui::InputText("Vault Name", newVaultName, IM_ARRAYSIZE(newVaultName), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                 if (strlen(newVaultPath) > 0) {
+                 // Enter key logic
+                 if (!isDuplicate && strlen(newVaultPath) > 0) {
                      Vault v; v.name = (strlen(newVaultName) ? newVaultName : "Vault");
                      v.path = newVaultPath; v.letter = driveLetters[driveIndex];
                      VaultRegistry::Add(v); VaultRegistry::Save(); g_ShowAddWindow = false;
                  }
             }
-            ImGui::InputText("Path", newVaultPath, MAX_PATH); 
+            ImGui::InputText("Path", newVaultPath, MAX_PATH);
+            
+            if (isDuplicate) ImGui::TextColored(ImVec4(1,0,0,1), "Warning: Vault already registered!");
+            
             ImGui::Combo("Mount Letter", &driveIndex, "A\0B\0C\0D\0E\0F\0G\0H\0I\0J\0K\0L\0M\0N\0O\0P\0Q\0R\0S\0T\0U\0V\0W\0X\0Y\0Z\0");
             ImGui::Spacing();
             if (ImGui::Button("CONFIRM", ImVec2(100, 0))) {
                 if (strlen(newVaultPath) > 0) {
                     if (SystemUtils::IsDriveMounted(driveLetters[driveIndex])) {
                         AddLog("[ERROR] Drive letter %c: already in use!", driveLetters[driveIndex]);
+                    } else if (isDuplicate) {
+                        AddLog("[ERROR] Vault path already registered!");
                     } else {
                         Vault v; v.name = (strlen(newVaultName) ? newVaultName : "Vault");
                         v.path = newVaultPath; v.letter = driveLetters[driveIndex];
@@ -543,7 +560,7 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
              }
         }
         
-        // Modal for Async Progress
+        // Modal for Async Progress & TRANSITION to Success Modal
         if (ImGui::BeginPopupModal("CREATING VAULT...", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
             ImGui::Text("Creating secure vault container...");
             ImGui::Text("Please wait. This may take several minutes for large vaults.");
@@ -553,13 +570,73 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
             ImGui::TextColored(ImVec4(1,1,0,1), "Status: Formatting...");
             ImGui::Dummy(ImVec2(250, 0));
             
-            // Check flags
             if (g_creationDone) {
-                ImGui::CloseCurrentPopup();
-                if (g_creationSuccess) AddLog("[SUCCESS] Vault Created!");
-                else AddLog("[FAIL] Creation failed with exit code %d.", g_creationExitCode);
+                ImGui::CloseCurrentPopup(); 
+                if (g_creationSuccess) {
+                    g_ShowVaultCreatedSuccess = true; // Trigger success modal
+                    AddLog("[SUCCESS] Vault Created: %s", createPath);
+                } else {
+                    AddLog("[FAIL] Creation failed with exit code %d.", g_creationExitCode);
+                }
+                g_creationDone = false; // Reset flag
             }
             ImGui::EndPopup();
+        }
+
+        // ================== VAULT CREATED SUCCESS MODAL ==================
+        if (g_ShowVaultCreatedSuccess) { 
+             ImGui::OpenPopup("VAULT CREATED SUCCESSFULLY"); 
+             g_ShowVaultCreatedSuccess = false; 
+        }
+
+        if (ImGui::BeginPopupModal("VAULT CREATED SUCCESSFULLY", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+             ImGui::TextColored(ImVec4(0,1,0,1), "SUCCESS! Vault Ready.");
+             ImGui::Separator();
+             ImGui::Text("Path: %s", createPath);
+             ImGui::Text("Size: %d %s", createSizeVal, (createSizeUnit == 0 ? "MB" : "GB"));
+             
+             ImGui::Dummy(ImVec2(0, 10));
+             
+             // Auto-Add and Mount logic
+             if (ImGui::Button("MOUNT VAULT NOW", ImVec2(200, 35))) {
+                 // Check if already exists (it shouldn't, but safe check)
+                 bool exists = false;
+                 auto& vaults = VaultRegistry::All();
+                 for(const auto& v : vaults) { if (v.path == createPath) exists = true; }
+                 
+                 if (!exists) {
+                     Vault v; 
+                     char fname[64];
+                     SystemUtils::ExtractFileName(createPath, fname, 64);
+                     v.name = fname;
+                     v.path = createPath;
+                     v.letter = driveLetters[driveIndex]; // Use default from dropdown (usually A)
+                     VaultRegistry::Add(v);
+                     VaultRegistry::Save();
+                     
+                     // Set Active
+                     VaultRegistry::SetActive((int)vaults.size() - 1);
+                     g_config.lastActiveIndex = (int)vaults.size() - 1;
+                 } else {
+                     // Find and set active
+                     for(size_t i=0; i<vaults.size(); i++) {
+                         if (vaults[i].path == createPath) { VaultRegistry::SetActive((int)i); break; }
+                     }
+                 }
+                 
+                 // Focus Password Input
+                 g_focusPassword = true;
+                 ImGui::CloseCurrentPopup();
+             }
+             
+             ImGui::Dummy(ImVec2(0, 5));
+             
+             if (ImGui::Button("GO TO LOGS", ImVec2(200, 30))) {
+                 g_switchToLogs = true;
+                 ImGui::CloseCurrentPopup();
+             }
+             
+             ImGui::EndPopup();
         }
 
         auto& allVaults = VaultRegistry::All();
@@ -585,7 +662,7 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
         {
             ImVec2 p = ImGui::GetCursorScreenPos();
             float winWidth = ImGui::GetWindowWidth();
-            ImGui::SetCursorPos(ImVec2(10, 8)); ImGui::TextDisabled("ZERO CRYPTO v7.4");
+            ImGui::SetCursorPos(ImVec2(10, 8)); ImGui::TextDisabled("ZERO CRYPTO v7.8");
             ImGui::SameLine(); ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), "[Speed Exit: CTRL+F12 ]");
             
             float btnRadius = 10.0f;
@@ -642,6 +719,13 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
                     } else {
                         ImGui::Text("DECRYPTION KEY:");
                         ImGui::PushItemWidth(-1);
+                        
+                        // Focus Password Logic
+                        if (g_focusPassword) {
+                            ImGui::SetKeyboardFocusHere();
+                            g_focusPassword = false;
+                        }
+                        
                         if (ImGui::InputText("##password", g_vaultPassword.Get(), g_vaultPassword.Size(), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue)) {
                             MountVault();
                         }

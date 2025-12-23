@@ -8,10 +8,10 @@ if (-not (Test-Path "info.o")) {
     Write-Host "[!] Resource compilation failed. Continuing without icon..." -ForegroundColor Yellow
 }
 
-Write-Host "[*] Compiling ZeroCrypto v7.8..." -ForegroundColor Cyan
+Write-Host "[*] Compiling ZeroCrypto v8.0..." -ForegroundColor Cyan
 
 
-g++ -o "ZeroCrypto v7.8.exe" `
+g++ -o "ZeroCrypto v8.0.exe" `
     info.o `
     src/main.cpp `
     src/core/VaultRegistry.cpp `
@@ -27,10 +27,9 @@ g++ -o "ZeroCrypto v7.8.exe" `
     -ld3d11 -ld3dcompiler -ldwmapi -lcomdlg32 -lole32 -lcrypt32 -mwindows -static
 
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "[+] Build Successful! Run ZeroCrypto.exe" -ForegroundColor Green
+    Write-Host "[+] Build Successful! Run ZeroCrypto v8.0.exe" -ForegroundColor Green
     
     Remove-Item info.o -ErrorAction SilentlyContinue
-}
-else {
+} else {
     Write-Host "[!] Build failed." -ForegroundColor Red
 }

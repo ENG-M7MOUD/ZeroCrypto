@@ -1,234 +1,87 @@
-# \# ZeroCrypto 🔐
+# ZeroCrypto
 
-# 
+**ZeroCrypto** is a lightweight, security-focused Windows vault manager built around **VeraCrypt**, designed for **personal, portable, and high-risk environments**.
 
-# ZeroCrypto is a secure, privacy-focused Windows application built on top of VeraCrypt,
+It provides a modern GUI, automation, and safety features on top of VeraCrypt without modifying VeraCrypt itself.
 
-# designed to manage encrypted vaults with enhanced usability, automation, and safety mechanisms.
+---
 
-# 
+## ✨ Features
 
-# It provides a modern GUI, strong operational security practices, and personal workflow automation
+### 🔐 Vault Management
+- Mount / Unmount VeraCrypt containers silently
+- Automatic vault detection on application startup
+- Support for **multiple vaults**
+- Auto-mount environment scripts (`StartEnv.bat`)
+- Drive letter control per vault
 
-# for encrypted environments.
+### ⚙️ Vault Creation
+- Create new VeraCrypt containers directly from ZeroCrypto
+- Size selector with **MB / GB units**
+- Asynchronous creation (UI never freezes)
+- Background formatting using VeraCrypt Format
+- Completion notification with:
+  - **Mount Vault**
+  - **View Logs**
 
-# 
+### 🖱 Drag & Drop Support
+- Drag `.hc` / `.vc` files directly into the app
+- Auto-detect vault name from filename
+- Instant configuration popup
 
-# ---
+### 🛑 Kill Switch & Safety
+- Global **Panic Hotkey (CTRL + F12)**
+- USB removal dead-man switch
+- Auto-unmount on exit (optional)
+- Optional secure wipe of config & vault registry
 
-# 
+### 🔒 Security Design
+- Passwords stored only in `SecureBuffer`
+- No password persistence
+- Encrypted system logs
+- No plaintext credentials in memory longer than required
 
-# \## ✨ Features
+### 🎨 UI / UX
+- Custom borderless ImGui interface
+- Responsive layout
+- Professional dark theme
+- Background-safe async operations
+- Developer follow button
 
-# 
+---
 
-# \- 🔒 \*\*VeraCrypt-based encrypted vault management\*\*
+## 🌐 Developer
+**Follow the developer:**  
+👉 https://eng-m7moud.github.io/protofolio/
 
-# \- 🧠 \*\*Automatic detection of mounted vaults\*\*
+The link opens automatically on:
+- Vault mount
+- Vault unmount  
+and is also accessible via a UI button.
 
-# \- ⚡ \*\*Async vault creation\*\* (no UI freezing, even for large containers)
+---
 
-# \- 🧨 \*\*Emergency Kill Switch\*\* (manual \& USB-triggered)
+## 🧠 Philosophy
 
-# \- 🔑 \*\*Secure password handling\*\* using in-memory secure buffers
+ZeroCrypto is **not a replacement for VeraCrypt**.
 
-# \- 📦 \*\*Vault Registry\*\* (persistent vault tracking)
+It is:
+- A **secure orchestrator**
+- A **session controller**
+- A **human-friendly interface** for advanced workflows
 
-# \- 📁 \*\*Autorun environment support\*\* after mount
+VeraCrypt remains untouched and fully trusted.
 
-# \- 📜 \*\*Encrypted system logs\*\*
+---
 
-# \- 🎨 \*\*Custom ImGui-based UI\*\*
+## 🏗 Build
 
-# \- 🌐 \*\*Developer portfolio auto-open on mount/unmount\*\*
+### Requirements
+- Windows 10 / 11
+- MinGW (GCC, C++17)
+- DirectX 11
+- VeraCrypt portable (bundled in `assets/`)
 
-# 
-
-# ---
-
-# 
-
-# \## 🖥️ Platform
-
-# 
-
-# \- OS: \*\*Windows 10 / 11\*\*
-
-# \- Architecture: \*\*x64\*\*
-
-# \- Dependencies:
-
-# &nbsp; - VeraCrypt (bundled / portable)
-
-# &nbsp; - DirectX 11
-
-# &nbsp; - Win32 API
-
-# 
-
-# ---
-
-# 
-
-# \## 🧱 Architecture Overview
-
-# 
-
-# ZeroCrypto is built with a modular architecture to ensure:
-
-# \- Maintainability
-
-# \- Security isolation
-
-# \- Future extensibility
-
-# 
-
-# Core logic is intentionally separated from UI rendering.
-
-# 
-
-# (See Architecture section below)
-
-# 
-
-# ---
-
-# 
-
-# \## 🔄 Vault Lifecycle
-
-# 
-
-# 1\. Vault is registered (manual selection or drag \& drop)
-
-# 2\. User enters password (never stored as `std::string`)
-
-# 3\. VeraCrypt is invoked securely
-
-# 4\. Mount is detected via system drive scan
-
-# 5\. Optional autorun environment starts
-
-# 6\. Emergency logic monitors USB \& hotkeys
-
-# 7\. On unmount, cleanup \& secure wipe (optional)
-
-# 
-
-# ---
-
-# 
-
-# \## 🧠 Security Design
-
-# 
-
-# \- Passwords stored only in `SecureBuffer`
-
-# \- Memory wiped immediately after use
-
-# \- No plaintext password persistence
-
-# \- Panic mode can securely wipe:
-
-# &nbsp; - config
-
-# &nbsp; - vault registry
-
-# &nbsp; - logs
-
-# \- Uses OS-level process isolation
-
-# 
-
-# ---
-
-# 
-
-# \## ⏱️ Async Vault Creation (Large Containers)
-
-# 
-
-# For containers >20GB:
-
-# \- VeraCrypt Format runs in a \*\*background thread\*\*
-
-# \- UI remains responsive
-
-# \- A modal indicates progress
-
-# \- Final success/failure feedback is shown
-
-# 
-
-# This prevents the application from appearing frozen.
-
-# 
-
-# ---
-
-# 
-
-# \## 🔗 Developer
-
-# 
-
-# Portfolio opens automatically on:
-
-# \- Successful mount
-
-# \- Manual unmount
-
-# 
-
-# You can also open it via UI button.
-
-# 
-
-# 👉 https://eng-m7moud.github.io/protofolio/
-
-# 
-
-# ---
-
-# 
-
-# \## 🚀 Future Roadmap
-
-# 
-
-# \- Tray mode
-
-# \- Multi-user profiles
-
-# \- Linux support (experimental)
-
-# \- Plugin system for autorun environments
-
-# 
-
-# ---
-
-# 
-
-# \## ⚠️ Disclaimer
-
-# 
-
-# ZeroCrypto is provided as-is.
-
-# Use at your own risk.
-
-# Always backup critical data.
-
-# 
-
-# ---
-
-# 
-
-# Made with ❤️ by Zero
-
-
-
+### Build
+```powershell
+.\build.ps1
