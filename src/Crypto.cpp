@@ -1,40 +1,39 @@
-//Crypto.cpp
 #include "Crypto.h"
 #include <windows.h>
 #include <wincrypt.h>
-#include <vector>
 
-
-static std::vector<uint8_t> sessionKey;
-
-void InitCrypto() {
-    if (!sessionKey.empty()) return;
-    
-    HCRYPTPROV hProv = 0;
-    
-    if (CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
-        sessionKey.resize(32);
-        
-        CryptGenRandom(hProv, 32, sessionKey.data());
-        CryptReleaseContext(hProv, 0);
-    } else {
-        // Fallback 
-        sessionKey = { /* ... static values as last resort ... */ };
-    }
-}
+#pragma comment(lib, "crypt32.lib")
 
 std::vector<uint8_t> Encrypt(const std::vector<uint8_t>& data) {
-    if (sessionKey.empty()) InitCrypto();
-    
-    std::vector<uint8_t> out = data;
+    if (data.empty()) return {};
 
+    DATA_BLOB input;
+    input.pbData = const_cast<BYTE*>(data.data());
+    input.cbData = (DWORD)data.size();
     
-    for (size_t i = 0; i < out.size(); i++)
-        out[i] ^= sessionKey[i % sessionKey.size()];
-    
-    return out;
+    DATA_BLOB output;
+    // Encrypt validation: Uses current user credentials.
+    // L"ZeroCryptoLogs" is the description.
+    if (CryptProtectData(&input, L"ZeroCryptoLogs", NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &output)) {
+        std::vector<uint8_t> result(output.pbData, output.pbData + output.cbData);
+        LocalFree(output.pbData);
+        return result;
+    }
+    return {};
 }
 
 std::vector<uint8_t> Decrypt(const std::vector<uint8_t>& data) {
-    return Encrypt(data); 
+    if (data.empty()) return {};
+
+    DATA_BLOB input;
+    input.pbData = const_cast<BYTE*>(data.data());
+    input.cbData = (DWORD)data.size();
+    
+    DATA_BLOB output;
+    if (CryptUnprotectData(&input, NULL, NULL, NULL, NULL, 0, &output)) {
+        std::vector<uint8_t> result(output.pbData, output.pbData + output.cbData);
+        LocalFree(output.pbData);
+        return result;
+    }
+    return {};
 }

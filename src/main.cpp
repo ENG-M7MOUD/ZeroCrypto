@@ -1,4 +1,3 @@
-
 #define _CRT_SECURE_NO_WARNINGS
 
 // ===== Win32 / System =====
@@ -17,6 +16,8 @@
 #include <cstdio>
 #include <cstdarg>
 #include <algorithm>
+#include <atomic>
+
 // ===== ImGui =====
 #include "../imgui/imgui.h"
 #include "../imgui/backends/imgui_impl_win32.h"
@@ -24,8 +25,9 @@
 
 // ===== ZeroCrypto Core =====
 #include "core/VaultRegistry.h"
+#include "core/SystemUtils.h"
+#include "core/SecureBuffer.h"
 #include "Crypto.h" 
-#include "SecureBuffer.h"
 
 // Fix for Drag & Drop UIPI issue
 #ifndef WM_COPYGLOBALDATA
@@ -37,7 +39,7 @@
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-// Link necessary libraries (Ensure build script links these too)
+// Link necessary libraries 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "user32.lib") 
@@ -52,14 +54,15 @@ struct AppConfig {
     int lastActiveIndex = 0; 
 };
 
+static const char* DEV_PORTFOLIO_URL = "https://eng-m7moud.github.io/protofolio/";
 
 static bool g_OpenAddPopup = false;
 static bool g_OpenCreatePopup = false;
 static bool g_ShowSuccess = false;
 
-// Add new flags for windows
 static bool g_ShowAddWindow = false;
 static bool g_ShowCreateWindow = false;
+static bool g_ShowCreationProgress = false; // Popup for async creation
 
 // Direct X
 static ID3D11Device* g_Device = nullptr;
@@ -75,7 +78,8 @@ static const char* driveLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 static char createPath[MAX_PATH] = "";
 static SecureBuffer g_createPassword(128);
-static int  createSizeMB = 500; 
+static int  createSizeVal = 500; 
+static int  createSizeUnit = 0; // 0 = MB, 1 = GB
 
 static AppConfig g_config; 
 static std::vector<std::string> g_logs; 
@@ -83,46 +87,17 @@ static bool g_switchToLogs = false;
 static char g_mountedDrive = 0;
 static bool g_isMounting = false;
 
+// Async Creation State
+static std::atomic<bool> g_isCreating{false};
+static std::atomic<bool> g_creationDone{false};
+static std::atomic<bool> g_creationSuccess{false};
+static int g_creationExitCode = 0;
+
 static SecureBuffer g_vaultPassword(128);
 
 #define HOTKEY_ID_PANIC 1001
 
 // ================== Helper Functions ==================
-
-
-void SanitizeVaults() {
-    auto& vaults = VaultRegistry::All();
-    if (vaults.empty()) return;
-
-    bool changed = false;
-    for (auto it = vaults.begin(); it != vaults.end(); ) {
-        
-        if (it->path.empty() || (it->name == "A" && it->path.length() < 3)) {
-            it = vaults.erase(it);
-            changed = true;
-        } else {
-            ++it;
-        }
-    }
-    if (changed) {
-        VaultRegistry::Save(); 
-    }
-}
-
-
-void ExtractFileName(const char* fullPath, char* dest, size_t size) {
-    if (!fullPath || !dest) return;
-    std::string pathStr = fullPath;
-    
-    size_t lastSlash = pathStr.find_last_of("\\/");
-    if (lastSlash != std::string::npos) pathStr = pathStr.substr(lastSlash + 1);
-    
-    size_t lastDot = pathStr.find_last_of(".");
-    if (lastDot != std::string::npos) pathStr = pathStr.substr(0, lastDot);
-    
-    strncpy(dest, pathStr.c_str(), size - 1);
-    dest[size - 1] = '\0';
-}
 
 void AddLog(const char* fmt, ...) {
     char buf[1024];
@@ -134,50 +109,12 @@ void AddLog(const char* fmt, ...) {
     g_logs.push_back(std::string(buf));
 }
 
-std::string GetBaseDir() {
-    char buffer[MAX_PATH];
-    GetModuleFileNameA(NULL, buffer, MAX_PATH);
-    std::string::size_type pos = std::string(buffer).find_last_of("\\/");
-    return std::string(buffer).substr(0, pos);
-}
-
-std::string GetAbsolutePath(const std::string& relativePath) {
-    char fullPath[MAX_PATH];
-    if (GetFullPathNameA(relativePath.c_str(), MAX_PATH, fullPath, NULL) != 0) return std::string(fullPath);
-    return relativePath;
-}
-
-bool FileExists(const std::string& name) {
-    std::ifstream f(name.c_str());
-    return f.good();
-}
-
-bool IsDriveMounted(char letter) {
-    DWORD mask = GetLogicalDrives();
-    return (mask & (1 << (toupper(letter) - 'A')));
-}
-
-DWORD ExecuteProcess(const std::string& appPath, const std::string& args, bool showWindow) {
-    STARTUPINFOA si;
-    PROCESS_INFORMATION pi;
-    memset(&si, 0, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = showWindow ? SW_SHOWNORMAL : SW_HIDE; 
-
-    std::string cmdLine = "\"" + appPath + "\" " + args;
-    if (!CreateProcessA(NULL, &cmdLine[0], NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return -1;
-
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD exitCode;
-    GetExitCodeProcess(pi.hProcess, &exitCode);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    return exitCode;
+void OpenDeveloperPortfolio() {
+    ShellExecuteA(NULL, "open", DEV_PORTFOLIO_URL, NULL, NULL, SW_SHOWNORMAL);
 }
 
 // ================== Persistence ==================
-std::string GetConfigPath() { return GetBaseDir() + "\\config.bin"; }
+std::string GetConfigPath() { return SystemUtils::GetBaseDir() + "\\config.bin"; }
 
 void SaveConfig() {
     std::ofstream ofs(GetConfigPath(), std::ios::binary);
@@ -203,7 +140,7 @@ void SaveEncryptedLogs() {
     std::string fullLog = "";
     for (const auto& line : g_logs) fullLog += line + "\n";
     std::vector<uint8_t> rawData(fullLog.begin(), fullLog.end());
-    std::vector<uint8_t> encryptedData = Encrypt(rawData);
+    std::vector<uint8_t> encryptedData = Encrypt(rawData); // Uses DPAPI
     std::ofstream outFile("system.log.enc", std::ios::binary);
     if (outFile.is_open()) {
         outFile.write(reinterpret_cast<const char*>(encryptedData.data()), encryptedData.size());
@@ -247,38 +184,29 @@ void SetupProfessionalStyle() {
 
 // ================== Core Logic ==================
 
-void SecureDeleteFile(const std::string& path) {
-    HANDLE hFile = CreateFileA(path.c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        DWORD size = GetFileSize(hFile, NULL);
-        if (size != INVALID_FILE_SIZE) {
-            std::vector<char> zeros(4096, 0);
-            DWORD written;
-            DWORD bytesLeft = size;
-            SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
-            while (bytesLeft > 0) {
-                DWORD chunk = (bytesLeft < 4096) ? bytesLeft : 4096;
-                WriteFile(hFile, zeros.data(), chunk, &written, NULL);
-                bytesLeft -= written;
-            }
-        }
-        FlushFileBuffers(hFile);
-        CloseHandle(hFile);
-    }
-    DeleteFileA(path.c_str());
-}
-
 void UnmountVault() {
     AddLog("[CMD] Executing Force Dismount...");
-    std::string exeDir = GetBaseDir();
+    std::string exeDir = SystemUtils::GetBaseDir();
     std::string vcPath = exeDir + "\\assets\\veracrypt\\VeraCrypt.exe";
-    DWORD exitCode = ExecuteProcess(vcPath, "/dismount /force /quit /silent", false);
-    if (exitCode != 0) AddLog("[WARN] Dismount command failed with exit code %d.", exitCode);
     
+    // Safety check: ensure binary exists unless in panic mode
+    if (!SystemUtils::FileExists(vcPath)) {
+         AddLog("[WARN] VeraCrypt not found, assuming dismount.");
+         // Proceed to cleanup anyway
+    } else {
+        DWORD exitCode = SystemUtils::ExecuteProcess(vcPath, "/dismount /force /quit /silent", false);
+        if (exitCode != 0) AddLog("[WARN] Dismount command failed with exit code %d.", exitCode);
+    }
+    
+    // Auto-open portfolio on successful unmount (if not panic/wiping)
+    if (!g_config.wipeOnPanic) {
+        OpenDeveloperPortfolio();
+    }
+
     if (g_config.wipeOnPanic) {
         AddLog("[PANIC] Wiping Configuration...");
-        SecureDeleteFile(GetConfigPath());
-        SecureDeleteFile("zerocrypto.cfg"); 
+        SystemUtils::SecureWipeFile(GetConfigPath());
+        SystemUtils::SecureWipeFile("zerocrypto.cfg"); 
         AddLog("[PANIC] Terminating.");
         Sleep(500); 
         exit(0); 
@@ -290,9 +218,9 @@ void AttemptAutorun(char driveLetter) {
     std::string scriptPath = std::string(1, driveLetter) + ":\\SecureEnv\\StartEnv.bat";
     AddLog("[AUTORUN] Checking: %s", scriptPath.c_str());
     Sleep(1500); 
-    if (FileExists(scriptPath)) {
+    if (SystemUtils::FileExists(scriptPath)) {
         AddLog("[AUTORUN] Found! Executing...");
-        ExecuteProcess("powershell", "-WindowStyle Hidden -Command \"Get-ChildItem -Path '" + std::string(1, driveLetter) + ":\\SecureEnv' -Recurse | Unblock-File\"", false);
+        SystemUtils::ExecuteProcess("powershell", "-WindowStyle Hidden -Command \"Get-ChildItem -Path '" + std::string(1, driveLetter) + ":\\SecureEnv' -Recurse | Unblock-File\"", false);
         std::string workingDir = std::string(1, driveLetter) + ":\\SecureEnv";
         ShellExecuteA(NULL, "open", scriptPath.c_str(), NULL, workingDir.c_str(), SW_SHOWNORMAL);
         AddLog("[AUTORUN] Environment launched.");
@@ -301,36 +229,67 @@ void AttemptAutorun(char driveLetter) {
     }
 }
 
-void CreateNewVaultContainer() {
+// Background Worker for Vault Creation
+void VaultCreationWorker(std::string path, std::string password, int sizeMB) {
+    std::string fmtPath = SystemUtils::GetBaseDir() + "\\assets\\veracrypt\\VeraCrypt Format.exe";
+    
+    // Construct args
+    std::string args = "/create \"" + path + 
+                       "\" /size " + std::to_string(sizeMB) + "M" + 
+                       " /password \"" + password + 
+                       "\" /encryption AES /hash sha-512 /filesystem exfat /silent";
+
+    // Blocking call (but inside this thread, so UI stays alive)
+    DWORD exitCode = SystemUtils::ExecuteProcess(fmtPath, args, true); 
+
+    // Secure wipe of thread-local password copy and args
+    std::fill(password.begin(), password.end(), 0);
+    std::fill(args.begin(), args.end(), 0);
+
+    g_creationExitCode = exitCode;
+    g_creationSuccess = (exitCode == 0);
+    g_creationDone = true;
+    g_isCreating = false;
+}
+
+void StartVaultCreation() {
+    if (createSizeVal <= 0) { AddLog("[ERROR] Invalid vault size!"); return; }
+    if (strlen(createPath) == 0) { AddLog("[ERROR] No path specified!"); return; }
+    
+    std::string fmtPath = SystemUtils::GetBaseDir() + "\\assets\\veracrypt\\VeraCrypt Format.exe";
+    if (!SystemUtils::FileExists(fmtPath)) { AddLog("[ERROR] 'VeraCrypt Format.exe' not found!"); return; }
+
     g_switchToLogs = true;
     AddLog("------------------------------------------------");
-    AddLog("[CREATE] Initializing Vault Creation...");
-    if (createSizeMB <= 0) { AddLog("[ERROR] Invalid vault size!"); return; }
-    if (strlen(createPath) == 0) { AddLog("[ERROR] No path specified!"); return; }
-    std::string fmtPath = GetBaseDir() + "\\assets\\veracrypt\\VeraCrypt Format.exe";
-    
-    if (!FileExists(fmtPath)) { AddLog("[ERROR] 'VeraCrypt Format.exe' not found!"); return; }
+    AddLog("[CREATE] Initializing Vault Creation (Async)...");
 
-    std::string args = "/create \"" + std::string(createPath) + 
-                      "\" /size " + std::to_string(createSizeMB) + "M" + 
-                      " /password \"" + g_createPassword.ToString() + 
-                      "\" /encryption AES /hash sha-512 /filesystem exfat /silent";
+    // Calculate actual size in MB
+    long long sizeMB = createSizeVal;
+    if (createSizeUnit == 1) { // GB
+        sizeMB *= 1024;
+    }
 
-    AddLog("[CMD] Executing Formatter...");
-    DWORD exitCode = ExecuteProcess(fmtPath, args, true); 
-    g_createPassword.Clear(); 
-    bool result = (exitCode == 0);
-    if (result) AddLog("[SUCCESS] Vault Created!");
-    else AddLog("[FAIL] Creation failed with exit code %d.", exitCode);
+    g_creationDone = false;
+    g_creationSuccess = false;
+    g_isCreating = true;
+    g_ShowCreationProgress = true; // Open modal
+
+    // Copy password safely for thread
+    std::string pwd = g_createPassword.ToString();
+    g_createPassword.Clear(); // Wipe immediately from UI memory
+
+    // Launch worker thread
+    std::thread worker(VaultCreationWorker, std::string(createPath), pwd, (int)sizeMB);
+    worker.detach();
 }
 
 void MountVault() {
     auto* v = VaultRegistry::GetActive();
     if (!v) { AddLog("[ERROR] No vault selected!"); return; }
     
-    if (g_vaultPassword.ToString().empty()) { AddLog("[ERROR] Password is empty!"); return; }
+    if (strlen(g_vaultPassword.c_str()) == 0) { AddLog("[ERROR] Password is empty!"); return; }
     
-    if (IsDriveMounted(v->letter)) {
+    if (SystemUtils::IsDriveMounted(v->letter)) {
         AddLog("[INFO] Drive %c: is already mounted.", v->letter);
         return;
     }
@@ -338,16 +297,21 @@ void MountVault() {
     g_isMounting = true;
     AddLog("[INIT] Starting Mount Process...");
     
-    std::string vcPath = GetBaseDir() + "\\assets\\veracrypt\\VeraCrypt.exe";
-    if (!FileExists(vcPath)) { AddLog("[ERROR] VeraCrypt.exe not found!"); g_isMounting = false; return; }
+    std::string vcPath = SystemUtils::GetBaseDir() + "\\assets\\veracrypt\\VeraCrypt.exe";
+    if (!SystemUtils::FileExists(vcPath)) { AddLog("[ERROR] VeraCrypt.exe not found!"); g_isMounting = false; return; }
     
-    std::string args = "/volume \"" + GetAbsolutePath(v->path) + "\" " +
+    std::string psw = g_vaultPassword.ToString();
+    std::string args = "/volume \"" + SystemUtils::GetAbsolutePath(v->path) + "\" " +
                        "/letter " + std::string(1, v->letter) + " " +
-                       "/password \"" + g_vaultPassword.ToString() + "\" " +
+                       "/password \"" + psw + "\" " +
                        "/quit"; 
 
     AddLog("[CMD] Executing VeraCrypt (GUI Mode)...");
-    DWORD exitCode = ExecuteProcess(vcPath, args, true);
+    DWORD exitCode = SystemUtils::ExecuteProcess(vcPath, args, true);
+    
+    // Secure cleanup
+    std::fill(psw.begin(), psw.end(), 0);
+    std::fill(args.begin(), args.end(), 0);
     g_vaultPassword.Clear(); 
     g_isMounting = false;
 
@@ -356,10 +320,11 @@ void MountVault() {
 
     if (success) {
         Sleep(1000);
-        if (IsDriveMounted(v->letter)) {
+        if (SystemUtils::IsDriveMounted(v->letter)) {
             AddLog("[SUCCESS] Mount operation completed.");
             g_mountedDrive = v->letter;
             g_ShowSuccess = true;
+            OpenDeveloperPortfolio(); // Auto-open URL
             std::thread([=](){ AttemptAutorun(v->letter); }).detach();
         } else {
             AddLog("[FAIL] Drive not found after process exit.");
@@ -378,7 +343,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         DragQueryFileA(hDrop, 0, newVaultPath, MAX_PATH);
         DragFinish(hDrop);
         
-        ExtractFileName(newVaultPath, newVaultName, sizeof(newVaultName));
+        SystemUtils::ExtractFileName(newVaultPath, newVaultName, sizeof(newVaultName));
         g_OpenAddPopup = true; 
 
         driveIndex = 0;
@@ -411,7 +376,8 @@ bool PickVaultFile(char* outPath, DWORD size, HWND owner) {
     ofn.lpstrFile = outPath;
     ofn.nMaxFile = size;
     ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST;
-    ofn.lpstrInitialDir = GetBaseDir().c_str();
+    std::string base = SystemUtils::GetBaseDir();
+    ofn.lpstrInitialDir = base.c_str();
     return GetOpenFileNameA(&ofn);
 }
 
@@ -424,7 +390,8 @@ bool SaveVaultFile(char* outPath, DWORD size, HWND owner) {
     ofn.nMaxFile = size;
     ofn.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT;
     ofn.lpstrDefExt = "hc";
-    ofn.lpstrInitialDir = GetBaseDir().c_str();
+    std::string base = SystemUtils::GetBaseDir();
+    ofn.lpstrInitialDir = base.c_str();
     return GetSaveFileNameA(&ofn);
 }
 
@@ -446,13 +413,12 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, hInst, LoadIcon(hInst, MAKEINTRESOURCE(101)), NULL, NULL, NULL, "ZeroCrypto", LoadIcon(hInst, MAKEINTRESOURCE(101)) };
     
     VaultRegistry::Load(); 
-    SanitizeVaults(); 
+    VaultRegistry::Sanitize(); 
     LoadConfig(); 
 
     RegisterClassEx(&wc);
     HWND hwnd = CreateWindowEx(WS_EX_APPWINDOW, wc.lpszClassName, "ZeroCrypto", WS_POPUP, 300, 200, 520, 360, NULL, NULL, wc.hInstance, NULL);
 
-    
     HMODULE hUser = LoadLibraryA("user32.dll");
     if (hUser) {
         typedef BOOL(WINAPI* ChangeFilter)(UINT, DWORD);
@@ -524,7 +490,7 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
             ImGui::Spacing();
             if (ImGui::Button("CONFIRM", ImVec2(100, 0))) {
                 if (strlen(newVaultPath) > 0) {
-                    if (IsDriveMounted(driveLetters[driveIndex])) {
+                    if (SystemUtils::IsDriveMounted(driveLetters[driveIndex])) {
                         AddLog("[ERROR] Drive letter %c: already in use!", driveLetters[driveIndex]);
                     } else {
                         Vault v; v.name = (strlen(newVaultName) ? newVaultName : "Vault");
@@ -542,17 +508,25 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
             SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             ImGui::Begin("Create Vault", &g_ShowCreateWindow, ImGuiWindowFlags_AlwaysAutoResize);
             ImGui::Text("CREATE NEW CONTAINER"); ImGui::Separator();
+            
             ImGui::LabelText("File Path", "%s", createPath);
-            ImGui::InputInt("Size (MB)", &createSizeMB, 10, 100);
+            
+            // Size and Unit Selector (MB/GB)
+            ImGui::InputInt("##SizeVal", &createSizeVal, 10, 100);
+            ImGui::SameLine();
+            ImGui::PushItemWidth(70);
+            ImGui::Combo("##SizeUnit", &createSizeUnit, "MB\0GB\0");
+            ImGui::PopItemWidth();
+            
             if (ImGui::InputText("Password", g_createPassword.Get(), g_createPassword.Size(), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue)) {
-                CreateNewVaultContainer(); g_ShowCreateWindow = false;
+                 if (createSizeVal > 0) StartVaultCreation();
             }
             ImGui::Dummy(ImVec2(0,5));
             if (ImGui::Button("CREATE & FORMAT", ImVec2(140, 0))) {
-                if (createSizeMB <= 0) {
+                if (createSizeVal <= 0) {
                     AddLog("[ERROR] Invalid vault size!");
                 } else {
-                    CreateNewVaultContainer(); g_ShowCreateWindow = false;
+                    StartVaultCreation(); // Triggers async
                 }
             }
             ImGui::SameLine();
@@ -560,9 +534,37 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
             ImGui::End();
         }
 
+        // Async Creation Status Check
+        if (g_isCreating) {
+             g_ShowCreateWindow = false; // Hide input window
+             if (g_ShowCreationProgress) {
+                 ImGui::OpenPopup("CREATING VAULT...");
+                 g_ShowCreationProgress = false; // Done opening
+             }
+        }
+        
+        // Modal for Async Progress
+        if (ImGui::BeginPopupModal("CREATING VAULT...", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+            ImGui::Text("Creating secure vault container...");
+            ImGui::Text("Please wait. This may take several minutes for large vaults.");
+            ImGui::Dummy(ImVec2(0, 5));
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, 5));
+            ImGui::TextColored(ImVec4(1,1,0,1), "Status: Formatting...");
+            ImGui::Dummy(ImVec2(250, 0));
+            
+            // Check flags
+            if (g_creationDone) {
+                ImGui::CloseCurrentPopup();
+                if (g_creationSuccess) AddLog("[SUCCESS] Vault Created!");
+                else AddLog("[FAIL] Creation failed with exit code %d.", g_creationExitCode);
+            }
+            ImGui::EndPopup();
+        }
+
         auto& allVaults = VaultRegistry::All();
         for(int i=0; i < allVaults.size(); i++) {
-             if(IsDriveMounted(allVaults[i].letter)) {
+             if(SystemUtils::IsDriveMounted(allVaults[i].letter)) {
                  if (VaultRegistry::GetActive() != &allVaults[i]) {
                      VaultRegistry::SetActive(i);
                      g_config.lastActiveIndex = i;
@@ -623,7 +625,7 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
                 
                 auto* activeVault = VaultRegistry::GetActive();
                 if (activeVault) {
-                    bool isMounted = IsDriveMounted(activeVault->letter);
+                    bool isMounted = SystemUtils::IsDriveMounted(activeVault->letter);
                     if (isMounted) {
                         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "STATUS: ACTIVE SESSION");
                         ImGui::Text("Drive Mounted at: %c:", activeVault->letter);
@@ -658,7 +660,7 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
                 if (ImGui::Button("ADD EXISTING", ImVec2(150, 25))) {
                     ZeroMemory(newVaultPath, MAX_PATH);
                     if (PickVaultFile(newVaultPath, MAX_PATH, hwnd)) {  
-                        ExtractFileName(newVaultPath, newVaultName, sizeof(newVaultName));
+                        SystemUtils::ExtractFileName(newVaultPath, newVaultName, sizeof(newVaultName));
                         g_ShowAddWindow = true;  
                         SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                     }
@@ -735,6 +737,15 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
             }
             ImGui::EndTabBar();
         }
+
+        // Bottom Area - New Button
+        ImGui::Dummy(ImVec2(0, 3));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.4f, 0.6f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.5f, 0.7f, 1.0f));
+        if (ImGui::Button("FOLLOW DEVELOPER", ImVec2(-1, 22))) {
+            OpenDeveloperPortfolio();
+        }
+        ImGui::PopStyleColor(2);
 
         if (g_ShowSuccess) { ImGui::OpenPopup("MOUNT SUCCESSFUL"); g_ShowSuccess = false; }
         

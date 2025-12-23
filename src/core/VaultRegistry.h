@@ -12,6 +12,9 @@ class VaultRegistry {
 public:
     static void Load();
     static void Save();
+    
+    // Removes invalid entries
+    static void Sanitize();
 
     static void Add(const Vault& v);
     static std::vector<Vault>& All();
